@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environment
+venv/
+.venv/
+env/
+.env/
+
+# Environment variables
+.env
+.env.*
+
+# ChromeDriver / undetected-chromedriver cache
+.local-chromium/
+.undetected_chromedriver/
+
+# Temp Chrome profiles created at runtime
+/tmp/news_agent_chrome_*/
+
+# Logs and output
+*.log
+out.txt
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
