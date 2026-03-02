@@ -84,10 +84,15 @@ def _apply_content_filter(items, search: Optional[str]):
 # Health check
 # ---------------------------------------------------------------------------
 
-@router.get("/")
+@router.get("/", include_in_schema=False)
 def read_root():
     return {
-        "message": "Baha News Agent API is running.",
+        "message": "News Agent API is running.",
+        "docs": {
+            "swagger_ui": "/docs",
+            "redoc":      "/redoc",
+            "openapi":    "/openapi.json",
+        },
         "endpoints": {
             "baha_news": "/api/bahanews?hours=<n>&search=<keyword>",
             "x_feed":    "/api/xnews?hours=<n>&search=<keyword>",

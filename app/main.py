@@ -24,5 +24,38 @@ async def lifespan(app: FastAPI):
         yield
 
 
-app = FastAPI(title="Baha News Agent", lifespan=lifespan)
+_DESCRIPTION = """
+## News Agent API
+
+Scrapes live news from **baha.com** and the **X (Twitter)** profile feed using a
+headless Chrome browser that inherits cookies from your local Chrome profile.
+
+### Endpoints
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/bahanews` | Latest baha.com articles with full body text |
+| `GET /api/xnews` | Latest tweets from @MarioNawfal |
+| `GET /api/status` | Browser connection & authentication diagnostics |
+| `GET /api/debug-page` | Inspect CSS selectors on any baha.com page |
+
+### Common query parameters
+
+- **`hours`** – return only items from the last N hours  
+- **`search`** – keyword filter applied to article / tweet content (case-insensitive)
+
+### Interactive docs
+
+- Swagger UI → [`/docs`](/docs)  
+- ReDoc → [`/redoc`](/redoc)
+"""
+
+app = FastAPI(
+    title="News Agent API",
+    description=_DESCRIPTION,
+    version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+    lifespan=lifespan,
+)
 app.include_router(router)
