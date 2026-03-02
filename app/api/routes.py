@@ -6,17 +6,78 @@ on the application in ``app/main.py``.
 """
 import asyncio
 import sys
-from typing import Optional
+from typing import Any, Optional, Tuple
 
 from fastapi import APIRouter, Query
 
-from app.browser.session import get_browser, get_cdp_context, get_driver_lock, get_startup_error, get_startup_mode
+from app.browser.session import (
+    get_browser,
+    get_cdp_context,
+    get_driver_lock,
+    get_startup_error,
+    get_startup_mode,
+)
 from app.core.config import ARTICLE_SELECTORS
 from app.core.response import PrettyJSONResponse
 from app.scraper.article import fetch_article_content
 from app.scraper.news_list import ScrapeError, scrape_news_list
+from app.scraper.x_feed import scrape_x_feed
 
 router = APIRouter()
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
+
+def _get_driver() -> Tuple[Any, Optional[PrettyJSONResponse]]:
+    """Return ``(driver, None)`` when the browser is ready, or
+    ``(None, error_response)`` when it is not."""
+    browser = get_browser()
+    if browser is None:
+        startup_err = get_startup_error()
+        return None, PrettyJSONResponse(
+            content={
+                "status": "error",
+                "message": "Browser not available.",
+                "startup_error": startup_err,
+                "troubleshooting": "Visit /api/status for setup instructions.",
+            },
+            status_code=503,
+        )
+    driver = get_cdp_context()
+    if driver is None:
+        return None, PrettyJSONResponse(
+            content={
+                "status": "error",
+                "message": "Browser driver not available.",
+                "troubleshooting": "Visit /api/status for diagnostics.",
+            },
+            status_code=503,
+        )
+    return driver, None
+
+
+def _apply_content_filter(items, search: Optional[str]):
+    """Filter items to those whose content contains search (case-insensitive).
+    Items with error/login sentinel strings are excluded when a keyword is active.
+    """
+    if not search:
+        return items
+    keyword = search.lower()
+    before = len(items)
+    filtered = [
+        item for item in items
+        if item.content
+        and not item.content.startswith("[ERROR]")
+        and not item.content.startswith("[LOGIN")
+        and keyword in item.content.lower()
+    ]
+    print(
+        f"[routes] search='{search}': {before} -> {len(filtered)} items after filtering",
+        file=sys.stderr,
+    )
+    return filtered
 
 
 # ---------------------------------------------------------------------------
@@ -28,9 +89,10 @@ def read_root():
     return {
         "message": "Baha News Agent API is running.",
         "endpoints": {
-            "news": "/api/bahanews",
-            "status": "/api/status",
-            "debug": "/api/debug-page?url=<url>",
+            "baha_news": "/api/bahanews?hours=<n>&search=<keyword>",
+            "x_feed":    "/api/xnews?hours=<n>&search=<keyword>",
+            "status":    "/api/status",
+            "debug":     "/api/debug-page?url=<url>",
         },
     }
 
@@ -104,96 +166,49 @@ async def get_status():
 
 
 # ---------------------------------------------------------------------------
-# Main news feed
+# baha.com news feed
 # ---------------------------------------------------------------------------
-# http://localhost:8000/api/bahanews?hours=1&search=china
 
 @router.get("/api/bahanews")
-async def get_top_news(
-    hours: Optional[int] = Query(
-        None, description="Return only news posted within this many hours"
-    ),
-    search: Optional[str] = Query(
-        None, description="Filter results to items whose title or content contains this keyword (case-insensitive)"
-    ),
+async def get_baha_news(
+    hours: Optional[int] = Query(None, description="Return only news from the last N hours"),
+    search: Optional[str] = Query(None, description="Keyword to match against article content (case-insensitive)"),
 ):
-    """Return the latest baha.com news with full article content.
+    """Return the latest baha.com news with full article content."""
+    driver, err = _get_driver()
+    if err:
+        return err
 
-    Query parameters
-    ----------------
-    hours : int, optional
-        When provided, filters to items posted within the last *hours* hours.
-    """
-    browser = get_browser()
-    if browser is None:
-        startup_err = get_startup_error()
+    # Phase 1: collect news stubs (title + URL + timestamp)
+    try:
+        news_items = await scrape_news_list(driver, max_hours=hours)
+    except ScrapeError as scrape_exc:
         return PrettyJSONResponse(
             content={
                 "status": "error",
-                "message": "Browser not available.",
-                "startup_error": startup_err,
-                "troubleshooting": "Visit /api/status for setup instructions.",
-            },
-            status_code=503,
-        )
-
-    driver = get_cdp_context()
-    if driver is None:
-        return PrettyJSONResponse(
-            content={
-                "status": "error",
-                "message": "Browser driver not available.",
+                "message": str(scrape_exc),
                 "troubleshooting": "Visit /api/status for diagnostics.",
             },
-            status_code=503,
+            status_code=401,
         )
 
-    try:
-        # ── Phase 1: collect all URLs + titles ────────────────────────────
-        try:
-            news_items = await scrape_news_list(driver, max_hours=hours)
-        except ScrapeError as scrape_exc:
-            return PrettyJSONResponse(
-                content={
-                    "status": "error",
-                    "message": str(scrape_exc),
-                    "troubleshooting": "Visit /api/status for diagnostics.",
-                },
-                status_code=401,
-            )
+    print(f"[routes] bahanews Phase 1: {len(news_items)} items", file=sys.stderr)
 
-        print(f"[routes] Phase 1 done: {len(news_items)} items found", file=sys.stderr)
+    # Phase 2: fetch full article content for every stub
+    BATCH = 5
+    for i in range(0, len(news_items), BATCH):
+        batch = news_items[i : i + BATCH]
 
-        # ── Phase 2: fetch full content for EVERY item ────────────────────
-        BATCH = 5
-        for i in range(0, len(news_items), BATCH):
-            batch = news_items[i : i + BATCH]
+        async def _enrich(item, _drv=driver):
+            item.content = await fetch_article_content(_drv, item.url)
 
-            async def _enrich(item, _drv=driver):
-                result = await fetch_article_content(_drv, item.url)
-                item.content = result
+        await asyncio.gather(*[_enrich(item) for item in batch])
 
-            await asyncio.gather(*[_enrich(item) for item in batch])
+    print(f"[routes] bahanews Phase 2: content fetched for {len(news_items)} items", file=sys.stderr)
 
-        print(f"[routes] Phase 2 done: content fetched for all {len(news_items)} items", file=sys.stderr)
+    # Phase 3: optional keyword filter on content
+    news_items = _apply_content_filter(news_items, search)
 
-    # ── Phase 3: apply keyword filter (content only, after full fetch) ────
-    if search:
-        keyword = search.lower()
-        before = len(news_items)
-        news_items = [
-            item for item in news_items
-            if item.content
-            and not item.content.startswith("[ERROR]")
-            and not item.content.startswith("[LOGIN")
-            and keyword in item.content.lower()
-        ]
-        print(
-            f"[routes] Phase 3 search='{search}': {before} → {len(news_items)} items after filtering",
-            file=sys.stderr,
-        )
-
-    # Separate clean items from errored ones for transparency
     errors = [
         {"title": item.title, "url": item.url, "error": item.content}
         for item in news_items
@@ -219,6 +234,56 @@ async def get_top_news(
 
 
 # ---------------------------------------------------------------------------
+# X (Twitter) feed -- @MarioNawfal
+# ---------------------------------------------------------------------------
+
+@router.get("/api/xnews")
+async def get_x_news(
+    hours: Optional[int] = Query(None, description="Return only tweets from the last N hours"),
+    search: Optional[str] = Query(None, description="Keyword to match against tweet content (case-insensitive)"),
+):
+    """Return the latest tweets from @MarioNawfal on X (Twitter).
+
+    Authentication is inherited from the Chrome profile cookie store.
+    Results are ordered newest-first.
+    """
+    driver, err = _get_driver()
+    if err:
+        return err
+
+    # Phase 1: scrape X profile feed (tweet content is already included)
+    try:
+        tweets = await scrape_x_feed(driver, max_hours=hours)
+    except RuntimeError as exc:
+        return PrettyJSONResponse(
+            content={
+                "status": "error",
+                "message": str(exc),
+                "troubleshooting": "Make sure you are logged into x.com in Chrome and restart the server.",
+            },
+            status_code=401,
+        )
+
+    print(f"[routes] xnews Phase 1: {len(tweets)} tweets", file=sys.stderr)
+
+    # Phase 2: optional keyword filter on tweet content
+    tweets = _apply_content_filter(tweets, search)
+
+    return PrettyJSONResponse(content={
+        "status": "success",
+        "authenticated_session": True,
+        "source": "x.com/@MarioNawfal",
+        "time_frame_hours": hours,
+        "search": search,
+        "total_found": len(tweets),
+        "tweets": [
+            {k: v for k, v in tweet.model_dump().items() if k != "hours_ago"}
+            for tweet in tweets
+        ],
+    })
+
+
+# ---------------------------------------------------------------------------
 # Debug: identify the correct CSS selector for a news detail page
 # ---------------------------------------------------------------------------
 
@@ -229,25 +294,10 @@ async def debug_page(
     """Return all CSS class names on the page and what each ARTICLE_SELECTORS entry extracts.
 
     Useful when baha.com updates its markup and selectors need refreshing.
-    Also shows whether the page was loaded in an authenticated session.
     """
-    browser = get_browser()
-    if browser is None:
-        return PrettyJSONResponse(
-            content={
-                "status": "error",
-                "message": "Browser not available.",
-                "troubleshooting": "Visit /api/status for setup instructions.",
-            },
-            status_code=503,
-        )
-
-    driver = get_cdp_context()
-    if driver is None:
-        return PrettyJSONResponse(
-            content={"status": "error", "message": "Browser driver not available."},
-            status_code=503,
-        )
+    driver, err = _get_driver()
+    if err:
+        return err
 
     def _sync_debug():
         from selenium.webdriver.common.by import By
