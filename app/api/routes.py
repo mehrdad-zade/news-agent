@@ -17,8 +17,9 @@ from app.browser.session import (
     get_startup_error,
     get_startup_mode,
 )
-from app.core.config import ARTICLE_SELECTORS
+from app.core.config import ARTICLE_SELECTORS, ANTHROPIC_API_KEY, PUBLIC_URL
 from app.core.response import PrettyJSONResponse
+from app.core.summarise import build_summary
 from app.scraper.article import fetch_article_content
 from app.scraper.news_list import ScrapeError, scrape_news_list
 from app.scraper.x_feed import scrape_x_feed
@@ -86,18 +87,21 @@ def _apply_content_filter(items, search: Optional[str]):
 
 @router.get("/", include_in_schema=False)
 def read_root():
+    base = PUBLIC_URL or "http://localhost:8000"
     return {
         "message": "News Agent API is running.",
+        "public_url": PUBLIC_URL or None,
         "docs": {
-            "swagger_ui": "/docs",
-            "redoc":      "/redoc",
-            "openapi":    "/openapi.json",
+            "swagger_ui": f"{base}/docs",
+            "redoc":      f"{base}/redoc",
+            "openapi":    f"{base}/openapi.json",
         },
         "endpoints": {
-            "baha_news": "/api/bahanews?hours=<n>&search=<keyword>",
-            "x_feed":    "/api/xnews?hours=<n>&search=<keyword>",
-            "status":    "/api/status",
-            "debug":     "/api/debug-page?url=<url>",
+            "baha_news": f"{base}/api/bahanews?hours=<n>&search=<keyword>",
+            "x_feed":    f"{base}/api/xnews?hours=<n>&search=<keyword>",
+            "summary":   f"{base}/api/summary?hours=<n>&search=<keyword>",
+            "status":    f"{base}/api/status",
+            "debug":     f"{base}/api/debug-page?url=<url>",
         },
     }
 
@@ -222,6 +226,7 @@ async def get_baha_news(
 
     payload = {
         "status": "success",
+        "public_url": PUBLIC_URL or None,
         "authenticated_session": True,
         "time_frame_hours": hours,
         "search": search,
@@ -276,6 +281,7 @@ async def get_x_news(
 
     return PrettyJSONResponse(content={
         "status": "success",
+        "public_url": PUBLIC_URL or None,
         "authenticated_session": True,
         "source": "x.com/@MarioNawfal",
         "time_frame_hours": hours,
@@ -285,6 +291,56 @@ async def get_x_news(
             {k: v for k, v in tweet.model_dump().items() if k != "hours_ago"}
             for tweet in tweets
         ],
+    })
+
+
+# ---------------------------------------------------------------------------
+# Combined summary (OpenAI-powered semantic grouping)
+# ---------------------------------------------------------------------------
+
+@router.get("/api/summary")
+async def get_summary(
+    hours: Optional[int] = Query(None, description="Only include news/tweets from the last N hours"),
+    search: Optional[str] = Query(None, description="Keyword filter applied before summarisation"),
+):
+    """Fetch baha.com news and X tweets, then return an AI-generated summary.
+
+    All content is grouped into thematic topics by OpenAI.  Each topic gets a
+    short title keyword followed by a concise plain-English summary of every
+    related story/tweet found.  Requires the ``OPENAI_API_KEY`` environment
+    variable to be set.
+    """
+    if not ANTHROPIC_API_KEY:
+        return PrettyJSONResponse(
+            content={
+                "status": "error",
+                "message": "ANTHROPIC_API_KEY is not configured on the server.",
+                "troubleshooting": "Set the ANTHROPIC_API_KEY environment variable and restart the server.",
+            },
+            status_code=503,
+        )
+
+    driver, err = _get_driver()
+    if err:
+        return err
+
+    result = await build_summary(driver, hours=hours, search=search)
+
+    if result.get("status") == "error":
+        return PrettyJSONResponse(
+            content={"status": "error", "message": result.get("error", "unknown error")},
+            status_code=502,
+        )
+
+    return PrettyJSONResponse(content={
+        "status": "success",
+        "public_url": PUBLIC_URL or None,
+        "time_frame_hours": hours,
+        "search": search,
+        "total_sources": result["total_sources"],
+        "news_count": result["news_count"],
+        "tweet_count": result["tweet_count"],
+        "summary": result["summary"],
     })
 
 

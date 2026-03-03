@@ -4,3 +4,6 @@ selenium
 undetected-chromedriver
 beautifulsoup4
 pydantic
+anthropic
+python-dotenv
+httpx

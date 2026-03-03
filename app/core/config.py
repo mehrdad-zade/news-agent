@@ -4,6 +4,7 @@ app/core/config.py
 Centralised constants used across the application.
 """
 import re
+from typing import Optional
 
 # ---------------------------------------------------------------------------
 # Browser / network
@@ -87,3 +88,56 @@ ARTICLE_SELECTORS: list[str] = [
     '[class*="newsDetail"]',
     '[class*="storyBody"]',
 ]
+
+# ---------------------------------------------------------------------------
+# Anthropic (summarisation)
+# ---------------------------------------------------------------------------
+
+import os
+
+#: Anthropic API key – set via ANTHROPIC_API_KEY environment variable.
+ANTHROPIC_API_KEY: str = os.environ.get("ANTHROPIC_API_KEY", "")
+
+#: Model used for the /api/summary endpoint.
+ANTHROPIC_SUMMARY_MODEL: str = os.environ.get("ANTHROPIC_SUMMARY_MODEL", "claude-3-haiku-20240307")
+
+# ---------------------------------------------------------------------------
+# Telegram bot
+# ---------------------------------------------------------------------------
+
+#: Bot token from @BotFather.
+TELEGRAM_BOT_TOKEN: str = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+
+#: Chat / channel ID where summaries are posted.
+TELEGRAM_CHAT_ID: str = os.environ.get("TELEGRAM_CHAT_ID", "")
+
+# ---------------------------------------------------------------------------
+# Scheduler
+# ---------------------------------------------------------------------------
+
+#: How often (in minutes) the scheduler posts a summary to Telegram.
+#: Set to 0 or leave blank to disable.
+_schedule_interval = os.environ.get("SCHEDULE_INTERVAL_MINUTES", "0")
+SCHEDULE_INTERVAL_MINUTES: int = int(_schedule_interval) if _schedule_interval.isdigit() else 0
+
+#: Only include news/tweets from the last N hours (passed to the scraper).
+_schedule_hours = os.environ.get("SCHEDULE_HOURS", "")
+SCHEDULE_HOURS: Optional[int] = int(_schedule_hours) if _schedule_hours.isdigit() else None
+
+#: Keyword filter applied before summarisation (empty string = no filter).
+SCHEDULE_SEARCH: Optional[str] = os.environ.get("SCHEDULE_SEARCH") or None
+
+# ---------------------------------------------------------------------------
+# Public URL (set by Pinggy tunnel at startup)
+# ---------------------------------------------------------------------------
+
+def _read_public_url() -> str:
+    """Read the public URL written by start.sh after the Pinggy tunnel connects."""
+    try:
+        with open("/tmp/news_agent_public_url") as _f:
+            return _f.read().strip()
+    except Exception:
+        return ""
+
+#: Public base URL exposed via Pinggy (e.g. https://abc.a.pinggy.io).
+PUBLIC_URL: str = os.environ.get("PUBLIC_URL", "") or _read_public_url()

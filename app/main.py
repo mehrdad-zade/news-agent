@@ -11,17 +11,26 @@ This is the only place where:
 Keep this file thin – business logic belongs in the sub-packages.
 """
 from contextlib import asynccontextmanager
+import asyncio
+
+from dotenv import load_dotenv
+load_dotenv()  # load .env before any config is imported
 
 from fastapi import FastAPI
 
 from app.api.routes import router
 from app.browser.session import browser_lifespan
+from app.scheduler import scheduler_loop
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     async with browser_lifespan():
-        yield
+        task = asyncio.create_task(scheduler_loop())
+        try:
+            yield
+        finally:
+            task.cancel()
 
 
 _DESCRIPTION = """
