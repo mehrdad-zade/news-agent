@@ -30,8 +30,7 @@ from app.models.tweet import TweetItem
 # Constants
 # ---------------------------------------------------------------------------
 
-#: Target X profile URL.
-X_PROFILE_URL = "https://x.com/MarioNawfal"
+#: Base X URL used to build per-handle profile URLs.
 X_BASE_URL = "https://x.com"
 
 #: URL fragments that indicate an auth redirect.
@@ -105,15 +104,22 @@ def _parse_x_datetime(dt_str: str) -> tuple[datetime, float, str]:
 # Core sync scraper
 # ---------------------------------------------------------------------------
 
-def _sync_scrape_x(driver, max_hours: Optional[float]) -> List[TweetItem]:
-    """Navigate to the X profile and scrape tweets synchronously.
+def _sync_scrape_x(driver, max_hours: Optional[float], handle: str = "@marionawfal") -> List[TweetItem]:
+    """Navigate to an X profile and scrape tweets synchronously.
 
     Must be called inside a ``threading.Lock`` — Selenium is not thread-safe.
+
+    Parameters
+    ----------
+    handle:
+        @-prefixed Twitter/X handle, e.g. ``"@marionawfal"``.
     """
+    username = handle.lstrip("@")
+    profile_url = f"{X_BASE_URL}/{username}"
     try:
-        driver.get(X_PROFILE_URL)
+        driver.get(profile_url)
     except WebDriverException as exc:
-        raise RuntimeError(f"Navigation to {X_PROFILE_URL} failed: {exc.msg or exc}") from exc
+        raise RuntimeError(f"Navigation to {profile_url} failed: {exc.msg or exc}") from exc
 
     # --- Detect login redirect ------------------------------------------------
     _time.sleep(2)  # brief pause to allow JS redirect to settle
@@ -124,6 +130,9 @@ def _sync_scrape_x(driver, max_hours: Optional[float]) -> List[TweetItem]:
                 f"X redirected to {driver.current_url} — not authenticated. "
                 "Make sure you are logged into x.com in the Chrome profile used by this server."
             )
+
+    # Store resolved handle for use in log messages
+    _handle_label = handle
 
     early_text = (
         driver.execute_script(
@@ -162,7 +171,7 @@ def _sync_scrape_x(driver, max_hours: Optional[float]) -> List[TweetItem]:
         needed_scrolls = math.ceil(max_hours * _MAX_TWEETS_PER_HOUR / _TWEETS_PER_SCROLL * 1.2)
 
     print(
-        f"[x_feed] Scrolling up to {needed_scrolls} times "
+        f"[x_feed] {handle} — scrolling up to {needed_scrolls} times "
         f"(max_hours={max_hours}, {_MAX_TWEETS_PER_HOUR} tweets/h assumed).",
         file=sys.stderr,
     )
@@ -249,11 +258,11 @@ def _sync_scrape_x(driver, max_hours: Optional[float]) -> List[TweetItem]:
             )
             break
 
-    print(f"[x_feed] Collected {len(items)} unique tweets across all scroll steps.", file=sys.stderr)
+    print(f"[x_feed] {handle} — collected {len(items)} unique tweets across all scroll steps.", file=sys.stderr)
 
     # Most recent first
     items.sort(key=lambda t: t.hours_ago)
-    print(f"[x_feed] Returning {len(items)} tweets.", file=sys.stderr)
+    print(f"[x_feed] {handle} — returning {len(items)} tweets.", file=sys.stderr)
     return items
 
 
@@ -261,12 +270,22 @@ def _sync_scrape_x(driver, max_hours: Optional[float]) -> List[TweetItem]:
 # Public async interface
 # ---------------------------------------------------------------------------
 
-async def scrape_x_feed(driver, max_hours: Optional[float] = None) -> List[TweetItem]:
-    """Scrape the X profile feed.  Thread-safe async wrapper around ``_sync_scrape_x``."""
+async def scrape_x_feed(
+    driver,
+    max_hours: Optional[float] = None,
+    handle: str = "@marionawfal",
+) -> List[TweetItem]:
+    """Scrape an X profile feed.  Thread-safe async wrapper around ``_sync_scrape_x``.
+
+    Parameters
+    ----------
+    handle:
+        @-prefixed Twitter/X handle to scrape, e.g. ``"@marionawfal"``.
+    """
     lock = get_driver_lock()
 
     def _locked():
         with lock:
-            return _sync_scrape_x(driver, max_hours)
+            return _sync_scrape_x(driver, max_hours, handle=handle)
 
     return await asyncio.to_thread(_locked)

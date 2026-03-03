@@ -24,6 +24,7 @@ from app.core.config import (
     SCHEDULE_SEARCH,
     TELEGRAM_BOT_TOKEN,
     TELEGRAM_CHAT_ID,
+    TWITTER_HANDLES,
 )
 from app.telegram import send_message
 
@@ -136,31 +137,35 @@ async def _run_once() -> None:
     elif SCHEDULE_ENDPOINT == "xnews":
         from app.scraper.x_feed import scrape_x_feed
 
-        try:
-            tweets = await scrape_x_feed(driver, max_hours=SCHEDULE_HOURS)
-        except RuntimeError as exc:
-            msg = f"⚠️ *News Agent error* (xnews)\n{exc}"
-            await send_message(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, msg)
-            print("[scheduler] Telegram message sent.", file=sys.stderr)
-            return
+        lines = [f"🐦 *X Feed*" + (f" – {label}" if label else "")]
+        total_tweets = 0
 
-        if SCHEDULE_SEARCH:
-            kw = SCHEDULE_SEARCH.lower()
-            tweets = [
-                t for t in tweets
-                if t.content
-                and not t.content.startswith("[ERROR]")
-                and not t.content.startswith("[LOGIN")
-                and kw in t.content.lower()
-            ]
+        for handle in TWITTER_HANDLES:
+            try:
+                tweets = await scrape_x_feed(driver, max_hours=SCHEDULE_HOURS, handle=handle)
+            except RuntimeError as exc:
+                lines.append(f"\n*{handle}* – ⚠️ error: {exc}")
+                continue
 
-        lines = [f"🐦 *X / @MarioNawfal*" + (f" – {label}" if label else "")]
-        lines.append(f"_{len(tweets)} tweets_\n")
-        for t in tweets:
-            snippet = (t.content or "")[:200].replace("\n", " ")
-            if len(t.content or "") > 200:
-                snippet += "…"
-            lines.append(f"• {snippet}")
+            if SCHEDULE_SEARCH:
+                kw = SCHEDULE_SEARCH.lower()
+                tweets = [
+                    t for t in tweets
+                    if t.content
+                    and not t.content.startswith("[ERROR]")
+                    and not t.content.startswith("[LOGIN")
+                    and kw in t.content.lower()
+                ]
+
+            total_tweets += len(tweets)
+            lines.append(f"\n*{handle}* – _{len(tweets)} tweets_")
+            for t in tweets:
+                snippet = (t.content or "")[:200].replace("\n", " ")
+                if len(t.content or "") > 200:
+                    snippet += "…"
+                lines.append(f"• {snippet}")
+
+        lines.insert(1, f"_{total_tweets} tweets across {len(TWITTER_HANDLES)} handle(s)_")
         msg = "\n".join(lines)
 
     # ------------------------------------------------------------------

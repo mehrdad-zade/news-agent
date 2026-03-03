@@ -17,7 +17,7 @@ from app.browser.session import (
     get_startup_error,
     get_startup_mode,
 )
-from app.core.config import ARTICLE_SELECTORS, ANTHROPIC_API_KEY, PUBLIC_URL
+from app.core.config import ARTICLE_SELECTORS, ANTHROPIC_API_KEY, PUBLIC_URL, TWITTER_HANDLES
 from app.core.response import PrettyJSONResponse
 from app.core.summarise import build_summary
 from app.scraper.article import fetch_article_content
@@ -244,7 +244,7 @@ async def get_baha_news(
 
 
 # ---------------------------------------------------------------------------
-# X (Twitter) feed -- @MarioNawfal
+# X (Twitter) feed – multi-handle, grouped by handle
 # ---------------------------------------------------------------------------
 
 @router.get("/api/xnews")
@@ -252,45 +252,51 @@ async def get_x_news(
     hours: Optional[int] = Query(None, description="Return only tweets from the last N hours"),
     search: Optional[str] = Query(None, description="Keyword to match against tweet content (case-insensitive)"),
 ):
-    """Return the latest tweets from @MarioNawfal on X (Twitter).
+    """Return the latest tweets from all handles in TWITTER_HANDLES.
 
+    Results are grouped by handle, ordered newest-first within each group.
     Authentication is inherited from the Chrome profile cookie store.
-    Results are ordered newest-first.
     """
     driver, err = _get_driver()
     if err:
         return err
 
-    # Phase 1: scrape X profile feed (tweet content is already included)
-    try:
-        tweets = await scrape_x_feed(driver, max_hours=hours)
-    except RuntimeError as exc:
-        return PrettyJSONResponse(
-            content={
-                "status": "error",
-                "message": str(exc),
-                "troubleshooting": "Make sure you are logged into x.com in Chrome and restart the server.",
-            },
-            status_code=401,
-        )
+    async def _fetch_one(handle: str) -> dict:
+        try:
+            tweets = await scrape_x_feed(driver, max_hours=hours, handle=handle)
+        except RuntimeError as exc:
+            return {
+                "handle": handle,
+                "error": str(exc),
+                "total_found": 0,
+                "tweets": [],
+            }
 
-    print(f"[routes] xnews Phase 1: {len(tweets)} tweets", file=sys.stderr)
+        print(f"[routes] xnews {handle}: {len(tweets)} tweets", file=sys.stderr)
+        filtered = _apply_content_filter(tweets, search)
 
-    # Phase 2: optional keyword filter on tweet content
-    tweets = _apply_content_filter(tweets, search)
+        return {
+            "handle": handle,
+            "total_found": len(filtered),
+            "tweets": [
+                {k: v for k, v in tweet.model_dump().items() if k != "hours_ago"}
+                for tweet in filtered
+            ],
+        }
 
+    # Scrape all handles; Selenium lock inside scrape_x_feed serialises them
+    results = await asyncio.gather(*[_fetch_one(h) for h in TWITTER_HANDLES])
+
+    total = sum(r["total_found"] for r in results)
     return PrettyJSONResponse(content={
         "status": "success",
         "public_url": PUBLIC_URL or None,
         "authenticated_session": True,
-        "source": "x.com/@MarioNawfal",
         "time_frame_hours": hours,
         "search": search,
-        "total_found": len(tweets),
-        "tweets": [
-            {k: v for k, v in tweet.model_dump().items() if k != "hours_ago"}
-            for tweet in tweets
-        ],
+        "handles": TWITTER_HANDLES,
+        "total_found": total,
+        "results": list(results),
     })
 
 

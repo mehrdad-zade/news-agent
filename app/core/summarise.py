@@ -11,7 +11,7 @@ from typing import Optional
 
 import anthropic
 
-from app.core.config import ANTHROPIC_API_KEY, ANTHROPIC_SUMMARY_MODEL
+from app.core.config import ANTHROPIC_API_KEY, ANTHROPIC_SUMMARY_MODEL, ANTHROPIC_SYSTEM_PROMPT, TWITTER_HANDLES
 from app.scraper.article import fetch_article_content
 from app.scraper.news_list import ScrapeError, scrape_news_list
 from app.scraper.x_feed import scrape_x_feed
@@ -69,14 +69,20 @@ async def build_summary(
         print(f"[summary] baha scrape failed: {exc}", file=sys.stderr)
 
     # ------------------------------------------------------------------ #
-    # Scrape X feed                                                        #
+    # Scrape X feed – all configured handles                               #
     # ------------------------------------------------------------------ #
     try:
-        print("[summary] scraping X feed...", file=sys.stderr)
-        tweets = await scrape_x_feed(driver, max_hours=hours)
-        print(f"[summary] X: {len(tweets)} tweets", file=sys.stderr)
-    except RuntimeError as exc:
-        print(f"[summary] X scrape failed: {exc}", file=sys.stderr)
+        print(f"[summary] scraping X feed for handles: {TWITTER_HANDLES}", file=sys.stderr)
+        for handle in TWITTER_HANDLES:
+            try:
+                handle_tweets = await scrape_x_feed(driver, max_hours=hours, handle=handle)
+                tweets.extend(handle_tweets)
+                print(f"[summary] X {handle}: {len(handle_tweets)} tweets", file=sys.stderr)
+            except RuntimeError as exc:
+                print(f"[summary] X scrape failed for {handle}: {exc}", file=sys.stderr)
+        print(f"[summary] X total: {len(tweets)} tweets across all handles", file=sys.stderr)
+    except Exception as exc:
+        print(f"[summary] X scrape error: {exc}", file=sys.stderr)
 
     # ------------------------------------------------------------------ #
     # Optional keyword filter                                              #
@@ -109,18 +115,7 @@ async def build_summary(
     # ------------------------------------------------------------------ #
     # Anthropic summarisation                                              #
     # ------------------------------------------------------------------ #
-    system_prompt = (
-        "You are an expert financial and geopolitical news analyst. "
-        "You will receive a collection of news articles and tweets. "
-        "Your task is to produce a structured summary that groups all content "
-        "by topic. For each topic:\n"
-        "  1. Write a short TITLE KEYWORD in bold (e.g. **Federal Reserve Rate Decision**).\n"
-        "  2. Immediately below the title, write a concise paragraph summarising "
-        "all related stories and tweets under that topic, in plain English.\n"
-        "Order topics by importance/impact. Do not repeat content across topics. "
-        "Omit topics if there is only trivial coverage. "
-        "Do not add preamble or closing remarks – output only the grouped summaries."
-    )
+    system_prompt = ANTHROPIC_SYSTEM_PROMPT
     user_message = (
         f"Summarise the following {len(corpus_parts)} items "
         f"({'news articles and tweets' if news_items and tweets else 'news articles' if news_items else 'tweets'}) "

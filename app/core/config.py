@@ -101,6 +101,22 @@ ANTHROPIC_API_KEY: str = os.environ.get("ANTHROPIC_API_KEY", "")
 #: Model used for the /api/summary endpoint.
 ANTHROPIC_SUMMARY_MODEL: str = os.environ.get("ANTHROPIC_SUMMARY_MODEL", "claude-3-haiku-20240307")
 
+#: System prompt sent to Anthropic on every /api/summary call.
+#: Override via ANTHROPIC_SYSTEM_PROMPT env var.
+_DEFAULT_SYSTEM_PROMPT = (
+    "You are an expert financial and geopolitical news analyst. "
+    "You will receive a collection of news articles and tweets. "
+    "Your task is to produce a structured summary that groups all content "
+    "by topic. For each topic:\n"
+    "  1. Write a short TITLE KEYWORD in bold (e.g. **Federal Reserve Rate Decision**).\n"
+    "  2. Immediately below the title, write a concise paragraph summarising "
+    "all related stories and tweets under that topic, in plain English.\n"
+    "Order topics by importance/impact. Do not repeat content across topics. "
+    "Omit topics if there is only trivial coverage. "
+    "Do not add preamble or closing remarks \u2013 output only the grouped summaries."
+)
+ANTHROPIC_SYSTEM_PROMPT: str = os.environ.get("ANTHROPIC_SYSTEM_PROMPT", "") or _DEFAULT_SYSTEM_PROMPT
+
 # ---------------------------------------------------------------------------
 # Telegram bot
 # ---------------------------------------------------------------------------
@@ -130,6 +146,26 @@ SCHEDULE_SEARCH: Optional[str] = os.environ.get("SCHEDULE_SEARCH") or None
 #: Which endpoint the scheduler uses to feed the Telegram post.
 #: Accepted values: "summary" | "bahanews" | "xnews"  (default: "summary")
 SCHEDULE_ENDPOINT: str = os.environ.get("SCHEDULE_ENDPOINT", "summary").lower().strip()
+
+# ---------------------------------------------------------------------------
+# X (Twitter) scraper
+# ---------------------------------------------------------------------------
+
+def _parse_twitter_handles(raw: str) -> list[str]:
+    """Parse a comma-separated handle string into a cleaned list."""
+    handles = []
+    for h in raw.split(","):
+        h = h.strip()
+        if not h:
+            continue
+        if not h.startswith("@"):
+            h = f"@{h}"
+        handles.append(h)
+    return handles or ["@marionawfal"]
+
+#: X handles to scrape – comma-separated in env.  Defaults to @marionawfal.
+_raw_handles = os.environ.get("TWITTER_HANDLES", "@marionawfal")
+TWITTER_HANDLES: list[str] = _parse_twitter_handles(_raw_handles)
 
 # ---------------------------------------------------------------------------
 # Public URL (set by Pinggy tunnel at startup)
