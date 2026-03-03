@@ -127,6 +127,10 @@ SCHEDULE_HOURS: Optional[int] = int(_schedule_hours) if _schedule_hours.isdigit(
 #: Keyword filter applied before summarisation (empty string = no filter).
 SCHEDULE_SEARCH: Optional[str] = os.environ.get("SCHEDULE_SEARCH") or None
 
+#: Which endpoint the scheduler uses to feed the Telegram post.
+#: Accepted values: "summary" | "bahanews" | "xnews"  (default: "summary")
+SCHEDULE_ENDPOINT: str = os.environ.get("SCHEDULE_ENDPOINT", "summary").lower().strip()
+
 # ---------------------------------------------------------------------------
 # Public URL (set by Pinggy tunnel at startup)
 # ---------------------------------------------------------------------------
